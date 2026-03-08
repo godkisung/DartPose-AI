@@ -8,4 +8,10 @@ dependencies = [
     "mediapipe==0.10.14",
     "opencv-python>=4.13.0.92",
     "ultralytics>=8.4.21",
+    "yt-dlp>=2026.3.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
 ]
