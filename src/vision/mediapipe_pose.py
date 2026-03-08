@@ -1,122 +1,203 @@
+"""MediaPipe 기반 관절 좌표 추출 모듈.
+
+비디오 파일 또는 단일 프레임에서 인체 관절 좌표를 추출합니다.
+"""
+
 import cv2
 import mediapipe as mp
-import argparse
 import os
 import sys
 
-# 프로젝트 루트 경로를 sys.path에 추가하여 src 모듈 임포트 가능하게 함
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-from src.vision.rule_engine import PoseRuleEngine
+
+from src.models import Keypoints, FrameData
+from src.config import (
+    MEDIAPIPE_MODEL_COMPLEXITY,
+    MEDIAPIPE_MIN_DETECTION_CONF,
+    MEDIAPIPE_MIN_TRACKING_CONF,
+)
+from src.utils.video_utils import ensure_compatible_video
 
 
-def process_video_mediapipe(input_path, output_path):
-    """
-    MediaPipe Pose를 사용하여 동영상의 관절(Keypoints)을 추출하고 결과를 저장합니다.
-    """
-    if not os.path.exists(input_path):
-        print(f"Error: 입력 파일을 찾을 수 없습니다. 경로를 확인하세요: {input_path}")
-        return
+# MediaPipe landmark 인덱스 → Keypoints 필드 매핑
+_LANDMARK_MAP = {
+    'left_shoulder': 11,
+    'right_shoulder': 12,
+    'left_elbow': 13,
+    'right_elbow': 14,
+    'left_wrist': 15,
+    'right_wrist': 16,
+    'left_hip': 23,
+    'right_hip': 24,
+    'left_index': 19,
+    'right_index': 20,
+    'left_pinky': 17,
+    'right_pinky': 18,
+}
 
-    # MediaPipe 초기화
-    mp_pose = mp.solutions.pose
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
 
-    # 비디오 캡처 객체 초기화
-    cap = cv2.VideoCapture(input_path)
-    if not cap.isOpened():
-        print(f"Error: 동영상을 열 수 없습니다: {input_path}")
-        return
+class PoseExtractor:
+    """MediaPipe Pose를 이용한 관절 추출기."""
 
-    # 원본 비디오 속성 가져오기
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    def __init__(self):
+        self._mp_pose = mp.solutions.pose
+        self._mp_drawing = mp.solutions.drawing_utils
+        self._mp_drawing_styles = mp.solutions.drawing_styles
 
-    # 비디오 저장 객체 초기화
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # mp4 코덱
-    out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+    def extract_from_video(
+        self,
+        input_path: str,
+        output_path: str | None = None,
+    ) -> tuple[list[FrameData], float]:
+        """비디오 파일에서 모든 프레임의 관절 좌표를 추출합니다.
 
-    print(f"Processing video with MediaPipe: {input_path} ({total_frames} frames)...")
+        Args:
+            input_path: 입력 비디오 경로.
+            output_path: 스켈레톤 오버레이 비디오 저장 경로 (None이면 저장 안 함).
 
-    rule_engine = PoseRuleEngine(fps=fps)
-    frame_count = 0
-    with mp_pose.Pose(
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-        model_complexity=2 # 가장 무겁지만 정확한 모델 (0, 1, 2)
-    ) as pose:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        Returns:
+            (frames, fps) — 추출된 FrameData 리스트와 비디오 FPS.
+        """
+        compatible_path = ensure_compatible_video(input_path)
 
-            frame_count += 1
-            
-            # BGR 이미지를 RGB로 변환 (MediaPipe는 RGB를 사용)
-            frame.flags.writeable = False # 성능 향상을 위해 쓰기 불가 설정
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(image)
+        cap = cv2.VideoCapture(compatible_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"비디오를 열 수 없습니다: {input_path}")
 
-            # 이미지를 다시 BGR로 변환하여 그리기 가능하게 설정
-            image.flags.writeable = True
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            # Pose 랜드마크 그리기 및 룰 엔진 데이터 전달
-            if results.pose_landmarks:
-                mp_drawing.draw_landmarks(
-                    image,
-                    results.pose_landmarks,
-                    mp_pose.POSE_CONNECTIONS,
-                    landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-                )
-                
-                # 추출된 관절 데이터를 딕셔너리로 변환 (정규화된 0~1 좌표 사용)
-                landmarks = results.pose_landmarks.landmark
-                keypoints = {
-                    'left_shoulder': [landmarks[11].x, landmarks[11].y, landmarks[11].z],
-                    'right_shoulder': [landmarks[12].x, landmarks[12].y, landmarks[12].z],
-                    'left_elbow': [landmarks[13].x, landmarks[13].y, landmarks[13].z],
-                    'right_elbow': [landmarks[14].x, landmarks[14].y, landmarks[14].z],
-                    'left_wrist': [landmarks[15].x, landmarks[15].y, landmarks[15].z],
-                    'right_wrist': [landmarks[16].x, landmarks[16].y, landmarks[16].z],
-                    'left_hip': [landmarks[23].x, landmarks[23].y, landmarks[23].z],
-                    'right_hip': [landmarks[24].x, landmarks[24].y, landmarks[24].z],
-                    'left_index': [landmarks[19].x, landmarks[19].y, landmarks[19].z],
-                    'right_index': [landmarks[20].x, landmarks[20].y, landmarks[20].z],
-                    'left_pinky': [landmarks[17].x, landmarks[17].y, landmarks[17].z],
-                    'right_pinky': [landmarks[18].x, landmarks[18].y, landmarks[18].z],
-                }
-                timestamp_ms = frame_count * (1000.0 / fps)
-                rule_engine.feed_frame(frame_count, timestamp_ms, keypoints)
+        out = None
+        if output_path:
+            os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
-            out.write(image)
+        print(f"🎯 관절 추출 시작: {input_path} ({total_frames} 프레임, {fps:.1f} FPS)")
 
-            if frame_count % 30 == 0:
-                print(f"Progress: {frame_count}/{total_frames} frames processed.")
+        frames: list[FrameData] = []
+        detected_count = 0
 
-    cap.release()
-    out.release()
-    print(f"\n완료! MediaPipe 결과 영상이 저장되었습니다: {output_path}")
+        with self._mp_pose.Pose(
+            min_detection_confidence=MEDIAPIPE_MIN_DETECTION_CONF,
+            min_tracking_confidence=MEDIAPIPE_MIN_TRACKING_CONF,
+            model_complexity=MEDIAPIPE_MODEL_COMPLEXITY,
+        ) as pose:
+            frame_index = 0
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-    # Rule Engine 평가 수행
-    print("\n--- 다트 투구 분석 결과 (Rule Engine) ---")
-    analysis_result = rule_engine.analyze_throw()
-    import json
-    print(json.dumps(analysis_result, indent=2, ensure_ascii=False))
+                frame_index += 1
+                timestamp_ms = frame_index * (1000.0 / fps)
 
+                # MediaPipe 추론
+                frame.flags.writeable = False
+                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(image_rgb)
+
+                keypoints = None
+                if results.pose_landmarks:
+                    keypoints = self._landmarks_to_keypoints(results.pose_landmarks.landmark)
+                    detected_count += 1
+
+                    # 스켈레톤 오버레이
+                    if out is not None:
+                        frame.flags.writeable = True
+                        image_bgr = cv2.cvtColor(
+                            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                            cv2.COLOR_RGB2BGR,
+                        )
+                        self._mp_drawing.draw_landmarks(
+                            image_bgr,
+                            results.pose_landmarks,
+                            self._mp_pose.POSE_CONNECTIONS,
+                            landmark_drawing_spec=self._mp_drawing_styles.get_default_pose_landmarks_style(),
+                        )
+                        frame = image_bgr
+
+                frames.append(FrameData(
+                    frame_index=frame_index,
+                    timestamp_ms=timestamp_ms,
+                    keypoints=keypoints,
+                ))
+
+                if out is not None:
+                    out.write(frame)
+
+                if frame_index % 50 == 0:
+                    print(f"  진행: {frame_index}/{total_frames} ({detected_count} 감지)")
+
+        cap.release()
+        if out is not None:
+            out.release()
+            print(f"✓ 스켈레톤 오버레이 저장: {output_path}")
+
+        detection_rate = (detected_count / total_frames * 100) if total_frames > 0 else 0
+        print(f"✓ 추출 완료: {detected_count}/{total_frames} 프레임 감지 ({detection_rate:.1f}%)")
+
+        return frames, fps
+
+    def extract_from_frame(self, frame, pose_ctx) -> Keypoints | None:
+        """단일 프레임에서 관절 좌표를 추출합니다 (라이브 모드용).
+
+        Args:
+            frame: BGR numpy 배열.
+            pose_ctx: MediaPipe Pose 컨텍스트 (with mp_pose.Pose() as pose).
+
+        Returns:
+            Keypoints 또는 None (감지 실패).
+        """
+        frame.flags.writeable = False
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose_ctx.process(image_rgb)
+
+        if results.pose_landmarks:
+            return self._landmarks_to_keypoints(results.pose_landmarks.landmark)
+        return None
+
+    def create_pose_context(self):
+        """라이브 모드용 MediaPipe Pose 컨텍스트를 생성합니다."""
+        return self._mp_pose.Pose(
+            min_detection_confidence=MEDIAPIPE_MIN_DETECTION_CONF,
+            min_tracking_confidence=MEDIAPIPE_MIN_TRACKING_CONF,
+            model_complexity=MEDIAPIPE_MODEL_COMPLEXITY,
+        )
+
+    @staticmethod
+    def _landmarks_to_keypoints(landmarks) -> Keypoints:
+        """MediaPipe 랜드마크를 Keypoints 데이터 클래스로 변환합니다."""
+        data = {}
+        for joint_name, idx in _LANDMARK_MAP.items():
+            lm = landmarks[idx]
+            data[joint_name] = [lm.x, lm.y, lm.z]
+        return Keypoints(**data)
+
+
+# ─── 단독 실행 (디버그용) ─────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse
+    import json
+    from src.vision.rule_engine import PoseRuleEngine
+
     parser = argparse.ArgumentParser(description="MediaPipe Pose 관절 추출기")
-    parser.add_argument('--input', type=str, default='data/KakaoTalk_20260306_232406312.mp4', help='입력 동영상 경로')
-    parser.add_argument('--output', type=str, default='output/mediapipe_result.mp4', help='출력 동영상 경로')
-    
+    parser.add_argument('--input', type=str, default='data/sample_1.mp4')
+    parser.add_argument('--output', type=str, default='output/mediapipe_result.mp4')
     args = parser.parse_args()
-    
-    # output 폴더가 없으면 생성
-    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
-    if os.path.dirname(args.output) == '':
-       pass # current dir
-        
-    process_video_mediapipe(args.input, args.output)
+
+    extractor = PoseExtractor()
+    frames, fps = extractor.extract_from_video(args.input, args.output)
+
+    # 간단한 룰 엔진 테스트
+    engine = PoseRuleEngine(fps=fps)
+    for f in frames:
+        if f.keypoints:
+            engine.feed_frame(f.frame_index, f.timestamp_ms, f.keypoints.to_dict())
+
+    result = engine.analyze_throw()
+    print("\n--- 분석 결과 ---")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
