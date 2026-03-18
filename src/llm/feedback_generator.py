@@ -58,13 +58,13 @@ class FeedbackGenerator:
         if not session.throws:
             return "⚠ 분석된 투구가 없습니다. 영상에서 다트 투구 동작이 인식되지 않았습니다."
 
-        # Ollama LLM 시도
-        if self._is_ollama_available():
-            llm_feedback = self._generate_with_llm(session)
-            if llm_feedback:
-                return llm_feedback
+        # TODO: 향후 LLM 연동 활성화 (현재는 템플릿 기반 피드백만 사용)
+        # if self._is_ollama_available():
+        #     llm_feedback = self._generate_with_llm(session)
+        #     if llm_feedback:
+        #         return llm_feedback
 
-        # Fallback: 템플릿 기반 피드백
+        # 현재는 템플릿 기반 피드백만 제공
         return self._generate_template_feedback(session)
 
     # ─── Template-based Feedback ──────────────────────────────────

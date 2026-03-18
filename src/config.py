@@ -25,14 +25,7 @@ MEDIAPIPE_MODEL_COMPLEXITY = 2         # 모델 정확도 (0=가벼움, 1=보통
 MEDIAPIPE_MIN_DETECTION_CONF = 0.5
 MEDIAPIPE_MIN_TRACKING_CONF = 0.5
 
-# ─── Hardware (Serial) ─────────────────────────────────────────────────
-
-SERIAL_BAUDRATE = 115200
-SERIAL_DEFAULT_PORT = "/dev/ttyUSB0"
-SERIAL_TIMEOUT = 1                     # 시리얼 읽기 타임아웃 (초)
-SERIAL_RECONNECT_DELAY = 2            # 재연결 시도 간격 (초)
-
-# ─── LLM ───────────────────────────────────────────────────────────────
+# ─── LLM (Skeleton) ───────────────────────────────────────────────────
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "llama3"
