@@ -1,0 +1,24 @@
+# Ground Truth (GT) 라벨 — Tier 1
+#
+# 각 샘플 영상의 기대 투구 횟수입니다.
+# 모든 영상은 3회 투구를 포함하고 있으므로,
+# 분석 엔진의 throws_count == 3이면 성공으로 판정합니다.
+#
+# 형식:
+#   sample_name: 기대 투구 횟수
+#
+# 추후 Tier 2로 확장 시 각 투구의 릴리즈 프레임 등을 추가할 수 있습니다.
+
+labels:
+  sample_3:  3
+  sample_4:  3
+  sample_5:  3
+  sample_6:  3
+  sample_7:  3
+  sample_8:  3
+  sample_9:  3
+  sample_10: 3
+  sample_11: 3
+  sample_12: 3
+  sample_13: 3
+  sample_14: 3
