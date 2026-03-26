@@ -1,10 +1,10 @@
 """디버그 시각화 모듈.
 
 분석 파이프라인의 중간 신호를 matplotlib 그래프로 시각화합니다.
-투구 감지 및 Phase 경계를 직관적으로 확인하여 디버깅과 파라미터 튜닝에 활용합니다.
+FSM 기반 투구 감지의 상태 전환과 팔꿈치 각도 사이클을 직관적으로 표시합니다.
 
 생성되는 그래프:
-  Panel 1: Wrist Velocity + Segment Boundaries (ThrowSegmenter 진단)
+  Panel 1: Elbow Angle + FSM States + Segment Boundaries (ThrowSegmenter 진단)
   Panel 2: Elbow Angle + Phase Boundaries (PhaseDetector 진단)
   Panel 3: Elbow Angular Velocity + Release Point (MetricsCalculator 진단)
 """
@@ -31,15 +31,23 @@ class DebugPlotter:
 
     # 시각화 색상 팔레트
     _COLORS = {
-        "wrist_velocity": "#4FC3F7",       # 밝은 파랑 — 손목 속도 시계열
-        "peaks": "#FF5252",                # 빨강 — 피크 마커
+        "elbow_angle": "#4FC3F7",          # 밝은 파랑 — 팔꿈치 각도 시계열
+        "elbow_angle_raw": "#90CAF9",      # 연한 파랑 — 원시 각도 (비교용)
+        "peaks": "#FF5252",                # 빨강 — 피크 마커 (테이크백 최저점)
         "segment": "#66BB6A",              # 녹색 — 세그먼트 배경
-        "elbow_angle": "#FFB74D",          # 주황 — 팔꿈치 각도
         "elbow_velocity": "#CE93D8",       # 보라 — 팔꿈치 각속도
         "address": "#42A5F5",              # 파랑 — Address Phase
         "takeback": "#FFA726",             # 주황 — Takeback Phase
         "release": "#EF5350",              # 빨강 — Release Phase
         "follow_through": "#66BB6A",       # 녹색 — Follow-through Phase
+    }
+
+    # FSM 상태별 색상 (배경)
+    _FSM_COLORS = {
+        "idle": "#E0E0E0",                 # 회색 — 대기
+        "cocking": "#FFCDD2",              # 연한 빨강 — 팔 접기
+        "releasing": "#C8E6C9",            # 연한 초록 — 팔 펴기
+        "follow_through": "#BBDEFB",       # 연한 파랑 — 팔로스루
     }
 
     def __init__(self, output_dir: str = "output/debug"):
@@ -64,14 +72,14 @@ class DebugPlotter:
         """전체 세션의 디버그 오버뷰 그래프를 생성합니다.
 
         3개의 패널로 구성:
-        - Panel 1: 손목 속도 + 피크 + 세그먼트 구간
+        - Panel 1: 팔꿈치 각도 + FSM 상태 배경 + 세그먼트 구간
         - Panel 2: 팔꿈치 각도 시계열 + Phase 경계선
         - Panel 3: 팔꿈치 각속도 + 릴리즈 포인트
 
         Args:
             frames: 전체 세션의 유효 FrameData 리스트.
-            wrist_velocity: 손목 속도 시계열 (len = len(frames)).
-            peak_indices: ThrowSegmenter가 감지한 피크 인덱스 리스트.
+            wrist_velocity: 스무딩된 팔꿈치 각도 (FSM에서는 각도가 전달됨).
+            peak_indices: 테이크백 최저점 인덱스 리스트.
             segments: 분리된 세그먼트 리스트.
             session: 최종 분석 결과.
             side: 투구 팔 방향 ('left' 또는 'right').
@@ -95,30 +103,37 @@ class DebugPlotter:
             fontweight="bold",
         )
 
-        # ── Panel 1: 손목 속도 + 피크 + 세그먼트 ──────────────────────────
+        # ── Panel 1: 팔꿈치 각도 + FSM 상태 + 세그먼트 ────────────────────
         ax1 = axes[0]
-        ax1.set_title("Panel 1: Wrist Velocity + Segment Boundaries", fontsize=11, pad=8)
-        ax1.plot(time_axis, wrist_velocity, color=self._COLORS["wrist_velocity"],
-                 linewidth=0.8, label="Wrist Velocity")
+        ax1.set_title("Panel 1: Elbow Angle + FSM States + Segments", fontsize=11, pad=8)
+
+        # FSM 상태 배경 표시 (wrist_velocity가 실제로 smoothed_angles인 경우)
+        if len(wrist_velocity) == n_frames:
+            ax1.plot(time_axis, wrist_velocity, color=self._COLORS["elbow_angle"],
+                     linewidth=1.0, label="Smoothed Elbow Angle (°)")
+        # 원시 각도도 함께 표시
+        ax1.plot(time_axis, raw_angles, color=self._COLORS["elbow_angle_raw"],
+                 linewidth=0.5, alpha=0.5, label="Raw Elbow Angle (°)")
 
         # 세그먼트 배경 표시
         for i, seg in enumerate(segments):
             seg_start = seg[0].frame_index / fps
             seg_end = seg[-1].frame_index / fps
             ax1.axvspan(seg_start, seg_end, alpha=0.15,
-                        color=self._COLORS["segment"], label=f"Seg {i+1}" if i == 0 else None)
+                        color=self._COLORS["segment"],
+                        label=f"Seg {i+1}" if i == 0 else None)
 
-        # 피크 마커 표시
-        if len(peak_indices) > 0 and len(peak_indices) <= len(time_axis):
+        # 테이크백 최저점 마커 표시
+        if len(peak_indices) > 0:
             valid_peaks = [p for p in peak_indices if p < n_frames]
             if valid_peaks:
                 ax1.scatter(
-                    time_axis[valid_peaks], wrist_velocity[valid_peaks],
-                    color=self._COLORS["peaks"], s=60, zorder=5,
-                    marker="v", label="Peaks",
+                    time_axis[valid_peaks], raw_angles[valid_peaks],
+                    color=self._COLORS["peaks"], s=80, zorder=5,
+                    marker="v", label="Takeback Min",
                 )
 
-        ax1.set_ylabel("Speed (normalized/frame)")
+        ax1.set_ylabel("Angle (°)")
         ax1.legend(loc="upper right", fontsize=8)
         ax1.grid(True, alpha=0.3)
 
@@ -229,9 +244,9 @@ class DebugPlotter:
                 s = f.keypoints.get(f"{side}_shoulder")
                 e = f.keypoints.get(f"{side}_elbow")
                 w = f.keypoints.get(f"{side}_wrist")
-                if s is not None: last_s = np.array(s, dtype=np.float64)
-                if e is not None: last_e = np.array(e, dtype=np.float64)
-                if w is not None: last_w = np.array(w, dtype=np.float64)
+                if s is not None: last_s = np.array(s[:3], dtype=np.float64)
+                if e is not None: last_e = np.array(e[:3], dtype=np.float64)
+                if w is not None: last_w = np.array(w[:3], dtype=np.float64)
             shoulder[i] = last_s
             elbow[i] = last_e
             wrist[i] = last_w

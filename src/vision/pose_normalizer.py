@@ -158,7 +158,7 @@ class PoseNormalizer:
                 if frame.keypoints:
                     val = frame.keypoints.get(joint)
                     if val is not None:
-                        last_valid = np.array(val, dtype=np.float32)
+                        last_valid = np.array(val[:3], dtype=np.float32)
                 coords[i] = last_valid
 
             result[joint] = coords

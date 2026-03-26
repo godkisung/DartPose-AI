@@ -46,7 +46,6 @@ AI 모델의 인식 정확도를 극대화하기 위한 앱 내 UI/UX 구현 안
 │   │   ├── phase_detector.py   # 투구 4-Phase 감지 (각도 기반)
 │   │   ├── metrics_calculator.py # 생체역학 지표 계산
 │   │   ├── dart_analyzer.py    # 분석 로직 통합 시스템
-│   │   └── rule_engine.py      # 생체역학 분석 엔진 레거시
 │   ├── hardware/
 │   │   └── serial_receiver.py  # Arduino 통신 + 키보드 시뮬레이터
 │   ├── llm/

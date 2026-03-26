@@ -84,7 +84,7 @@ class PoseExtractor:
                     
                     for name, idx in _POSE_MAP.items():
                         lm = pose_results.pose_landmarks.landmark[idx]
-                        keypoints_data[name] = [lm.x, lm.y, lm.z]
+                        keypoints_data[name] = [lm.x, lm.y, lm.z, lm.visibility]
                     
                     wrist_l = pose_results.pose_landmarks.landmark[15]
                     wrist_r = pose_results.pose_landmarks.landmark[16]

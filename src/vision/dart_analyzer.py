@@ -22,7 +22,12 @@ from typing import Optional
 from src.models import (
     FrameData, ThrowAnalysis, ThrowPhases, SessionResult,
 )
-from src.config import THROW_MIN_FRAMES
+from src.config import (
+    THROW_MIN_FRAMES,
+    VALIDATION_MIN_WRIST_DISPLACEMENT,
+    VALIDATION_MIN_TAKEBACK_ANGLE,
+    VALIDATION_MAX_ELBOW_VELOCITY,
+)
 from src.vision.pose_normalizer import PoseNormalizer
 from src.vision.throw_segmenter import ThrowSegmenter
 from src.vision.phase_detector import PhaseDetector
@@ -230,29 +235,37 @@ class DartAnalyzer:
 
         coords = np.array(wrist_coords)
 
-        # 검증 1: 손목 최대 변위 (투구는 최소 0.10 이상의 이동이 있어야 함)
+        # 검증 1: 손목 최대 변위
         max_disp = float(np.max(np.linalg.norm(coords - coords[0], axis=1)))
-        if max_disp < 0.10:
+        if max_disp < VALIDATION_MIN_WRIST_DISPLACEMENT:
             return False, f"변위 부족 ({max_disp:.3f})"
 
-        # 검증 2: 릴리즈 타이밍 (테이크백 이후 최소 2프레임 이상)
-        if analysis.metrics.release_timing_ms < (2 * 1000 / self.fps):
+        # 검증 2: 릴리즈 타이밍 (테이크백 이후 최소 1프레임 이상)
+        if analysis.metrics.release_timing_ms < (1000 / self.fps):
             return False, f"릴리즈 타이밍 부족 ({analysis.metrics.release_timing_ms:.1f}ms)"
 
         # 검증 3: 팔꿈치 각도 변화 (팔을 접었다 펴는 동작이 있어야 함)
-        if analysis.metrics.takeback_angle_deg < 10.0:
+        if analysis.metrics.takeback_angle_deg < VALIDATION_MIN_TAKEBACK_ANGLE:
             return False, f"팔꿈치 굽힘 부족 ({analysis.metrics.takeback_angle_deg:.1f}°)"
+
+        # 검증 4: 비현실적인 팔꿈치 각속도 (추적 오류/노이즈 사이클 필터링)
+        if analysis.metrics.max_elbow_velocity_deg_s > VALIDATION_MAX_ELBOW_VELOCITY:
+            return False, f"비현실적인 각속도 ({analysis.metrics.max_elbow_velocity_deg_s:.0f}°/s)"
 
         return True, ""
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 
     def _detectThrowingSide(self, frames: list[FrameData]) -> str:
-        """투구 팔(좌/우)을 자동 감지합니다.
+        """투구 팔(좌/우)을 자동 감지합니다 (90도 정측면 촬영 기준).
 
-        두 가지 방법을 복합 사용:
-        1. 손가락(thumb_tip) 감지 횟수: 더 많이 감지된 쪽 = 투구 팔 (카메라와 가까운 손)
-        2. 손목 XY 분산: 움직임이 더 큰 쪽 = 투구 팔
+        3개 기준의 다수결 투표로 결정합니다:
+        1. Visibility : 투구 팔 관절의 평균 가시도가 더 높음 (정측면에서 투구 팔이 선명)
+        2. Depth (Z)  : 투구 팔이 카메라에 더 가까워 Z값이 더 작음 (음수 방향)
+        3. Variance   : 투구 손목의 XY 분산이 비투구 팔보다 현저히 큼
+
+        각 기준에서 right가 우세하면 +1, left가 우세하면 -1.
+        합계 >= 0이면 'right', < 0이면 'left' 반환.
 
         Args:
             frames: 유효 FrameData 리스트.
@@ -260,39 +273,71 @@ class DartAnalyzer:
         Returns:
             투구 팔 방향 ('left' 또는 'right').
         """
-        # 방법 1: 손가락 감지 횟수로 판단 (더 신뢰도 높음)
-        left_hand_count = sum(
-            1 for f in frames
-            if f.keypoints and f.keypoints.left_thumb_tip is not None
-        )
-        right_hand_count = sum(
-            1 for f in frames
-            if f.keypoints and f.keypoints.right_thumb_tip is not None
-        )
+        _ARM_JOINTS = ("shoulder", "elbow", "wrist")
 
-        # 5프레임 이상 차이면 손가락 감지 기반으로 결정
-        if abs(left_hand_count - right_hand_count) >= 5:
-            # 투구 팔의 손가락이 카메라 쪽으로 향하므로 더 잘 감지됨
-            return "right" if right_hand_count >= left_hand_count else "left"
+        r_vis: list[float] = []
+        l_vis: list[float] = []
+        r_z:   list[float] = []
+        l_z:   list[float] = []
+        r_wrist_xy: list[list[float]] = []
+        l_wrist_xy: list[list[float]] = []
 
-        # 방법 2: 손목 XY 분산으로 판단 (움직임이 큰 쪽)
-        right_wrists = [
-            f.keypoints.right_wrist[:2]
-            for f in frames
-            if f.keypoints and f.keypoints.right_wrist
-        ]
-        left_wrists = [
-            f.keypoints.left_wrist[:2]
-            for f in frames
-            if f.keypoints and f.keypoints.left_wrist
-        ]
+        for f in frames:
+            kp = f.keypoints
+            if kp is None:
+                continue
+            for joint in _ARM_JOINTS:
+                rc = kp.get(f"right_{joint}")
+                lc = kp.get(f"left_{joint}")
+                if rc:
+                    r_z.append(rc[2])
+                    if len(rc) >= 4:
+                        r_vis.append(rc[3])
+                if lc:
+                    l_z.append(lc[2])
+                    if len(lc) >= 4:
+                        l_vis.append(lc[3])
+            rw = kp.get("right_wrist")
+            lw = kp.get("left_wrist")
+            if rw:
+                r_wrist_xy.append(rw[:2])
+            if lw:
+                l_wrist_xy.append(lw[:2])
 
-        if not right_wrists:
-            return "left"
-        if not left_wrists:
-            return "right"
+        votes = 0
+        log: list[str] = []
 
-        r_var = np.var(np.array(right_wrists), axis=0).sum()
-        l_var = np.var(np.array(left_wrists), axis=0).sum()
+        # 기준 1: Visibility
+        if r_vis and l_vis:
+            rv, lv = float(np.mean(r_vis)), float(np.mean(l_vis))
+            if rv > lv:
+                votes += 1
+                log.append(f"vis→R({rv:.2f}>{lv:.2f})")
+            else:
+                votes -= 1
+                log.append(f"vis→L({lv:.2f}>{rv:.2f})")
 
-        return "right" if r_var >= l_var else "left"
+        # 기준 2: Z축 깊이 (값이 작을수록 카메라에 가까움 = 투구 팔)
+        if r_z and l_z:
+            rz, lz = float(np.mean(r_z)), float(np.mean(l_z))
+            if rz < lz:
+                votes += 1
+                log.append(f"z→R({rz:.3f}<{lz:.3f})")
+            else:
+                votes -= 1
+                log.append(f"z→L({lz:.3f}<{rz:.3f})")
+
+        # 기준 3: 손목 XY 분산
+        if len(r_wrist_xy) >= 3 and len(l_wrist_xy) >= 3:
+            rv2 = float(np.var(np.array(r_wrist_xy), axis=0).sum())
+            lv2 = float(np.var(np.array(l_wrist_xy), axis=0).sum())
+            if rv2 > lv2:
+                votes += 1
+                log.append(f"var→R({rv2:.4f}>{lv2:.4f})")
+            else:
+                votes -= 1
+                log.append(f"var→L({lv2:.4f}>{rv2:.4f})")
+
+        side = "right" if votes >= 0 else "left"
+        print(f"  ℹ 투구 팔 감지: {side} (vote={votes:+d} | {', '.join(log)})")
+        return side

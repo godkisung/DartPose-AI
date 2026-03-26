@@ -428,7 +428,7 @@ class MetricsCalculator:
             if frame.keypoints:
                 val = frame.keypoints.get(joint_name)
                 if val is not None:
-                    last_valid = np.array(val, dtype=np.float64)
+                    last_valid = np.array(val[:3], dtype=np.float64)
             coords[i] = last_valid
 
         return coords

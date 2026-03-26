@@ -120,8 +120,15 @@ class PhaseDetector:
         # ─ Step 5: 테이크백 정점 감지 ──────────────────────────────────────
         # Takeback max = 팔꿈치 각도 최솟값 (팔이 가장 많이 접힌 순간)
         # 앞쪽 75% 구간에서만 탐색 (릴리즈 이후 구간 배제)
+        # 관절 감지 실패(0°)를 배제하기 위해 5° 미만 프레임은 무시
         search_end = max(5, int(n * 0.75))
-        takeback_max_local = int(np.argmin(smooth_angles[:search_end]))
+        search_angles = smooth_angles[:search_end]
+        valid_mask = search_angles >= 5.0
+        if valid_mask.any():
+            masked = np.where(valid_mask, search_angles, np.inf)
+            takeback_max_local = int(np.argmin(masked))
+        else:
+            takeback_max_local = int(np.argmin(search_angles))
 
         # ─ Step 6: 하이브리드 릴리즈 스코어링 ──────────────────────────────
         release_local = self._detectReleaseHybrid(
@@ -373,7 +380,7 @@ class PhaseDetector:
             if frame.keypoints:
                 val = frame.keypoints.get(joint_name)
                 if val is not None:
-                    last_valid = np.array(val, dtype=np.float64)
+                    last_valid = np.array(val[:3], dtype=np.float64)
             coords[i] = last_valid
 
         return coords
