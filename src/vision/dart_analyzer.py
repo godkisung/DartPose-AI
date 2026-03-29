@@ -20,12 +20,11 @@ import numpy as np
 from typing import Optional
 
 from src.models import (
-    FrameData, ThrowAnalysis, ThrowPhases, SessionResult,
+    FrameData, ThrowAnalysis, SessionResult,
 )
 from src.config import (
     THROW_MIN_FRAMES,
     VALIDATION_MIN_WRIST_DISPLACEMENT,
-    VALIDATION_MIN_TAKEBACK_ANGLE,
     VALIDATION_MAX_ELBOW_VELOCITY,
 )
 from src.vision.pose_normalizer import PoseNormalizer
@@ -124,7 +123,10 @@ class DartAnalyzer:
             else:
                 print(f"    ✗ 기각 ({reason})")
 
-        # ─ Step 5: 다중 투구 일관성 점수 계산 ────────────────────────────
+        # ─ Step 5: 동적 상위 투구 선택 (MAD 스코어링) ───────────────────
+        analyses = self._selectTopThrows(analyses, n=3)
+
+        # ─ Step 6: 다중 투구 일관성 점수 계산 ────────────────────────────
         if len(analyses) >= 2:
             consistency = self._metrics_calc.computeConsistencyScore(analyses)
             for a in analyses:
@@ -140,7 +142,7 @@ class DartAnalyzer:
             throws=analyses,
         )
 
-        # ─ Step 6: 디버그 시각화 (옵션) ────────────────────────────────────
+        # ─ Step 7: 디버그 시각화 (옵션) ────────────────────────────────────
         if self.debug_plot and self._plotter is not None:
             try:
                 wrist_vel = getattr(self._segmenter, "_last_velocity", np.array([]))
@@ -240,19 +242,66 @@ class DartAnalyzer:
         if max_disp < VALIDATION_MIN_WRIST_DISPLACEMENT:
             return False, f"변위 부족 ({max_disp:.3f})"
 
-        # 검증 2: 릴리즈 타이밍 (테이크백 이후 최소 1프레임 이상)
-        if analysis.metrics.release_timing_ms < (1000 / self.fps):
-            return False, f"릴리즈 타이밍 부족 ({analysis.metrics.release_timing_ms:.1f}ms)"
-
-        # 검증 3: 팔꿈치 각도 변화 (팔을 접었다 펴는 동작이 있어야 함)
-        if analysis.metrics.takeback_angle_deg < VALIDATION_MIN_TAKEBACK_ANGLE:
-            return False, f"팔꿈치 굽힘 부족 ({analysis.metrics.takeback_angle_deg:.1f}°)"
-
-        # 검증 4: 비현실적인 팔꿈치 각속도 (추적 오류/노이즈 사이클 필터링)
+        # 검증 2: 비현실적인 팔꿈치 각속도 (추적 오류/노이즈 사이클)
         if analysis.metrics.max_elbow_velocity_deg_s > VALIDATION_MAX_ELBOW_VELOCITY:
             return False, f"비현실적인 각속도 ({analysis.metrics.max_elbow_velocity_deg_s:.0f}°/s)"
 
+        # 나머지 필터링은 _selectTopThrows()의 상대적 MAD 스코어링으로 처리
         return True, ""
+
+    # ─── Dynamic Selection ────────────────────────────────────────────────
+
+    def _selectTopThrows(
+        self,
+        analyses: list[ThrowAnalysis],
+        n: int = 3,
+    ) -> list[ThrowAnalysis]:
+        """Score all candidates and return the top-n most throw-like.
+
+        Fixed global thresholds fail across diverse throwing styles.
+        Instead, score candidates relative to the session median using
+        MAD-based z-scores — candidates closest to the median cluster
+        are most likely real throws.
+
+        Signals (all relative within this video):
+          1. Velocity proximity to median — real throws form a tight cluster.
+          2. Timing proximity to median   — real throws have consistent timing.
+
+        Args:
+            analyses: All candidates that passed basic validation.
+            n: Target number of throws to return.
+
+        Returns:
+            Up to n ThrowAnalysis objects in temporal order.
+        """
+        if len(analyses) <= n:
+            return analyses
+
+        velocities = np.array([a.metrics.max_elbow_velocity_deg_s for a in analyses])
+        timings    = np.array([a.metrics.release_timing_ms for a in analyses])
+
+        def mad_score(arr: np.ndarray) -> np.ndarray:
+            med = float(np.median(arr))
+            mad = max(float(np.median(np.abs(arr - med))), 1.0)
+            return np.abs(arr - med) / mad
+
+        # Lower score = closer to session median = more throw-like
+        scores = mad_score(velocities) + mad_score(timings)
+
+        top_indices = np.argsort(scores)[:n]
+        top_indices = np.sort(top_indices)  # restore temporal order
+
+        print(f"  ℹ _selectTopThrows: {len(analyses)}개 후보 → 상위 {n}개 선택")
+        for i, a in enumerate(analyses):
+            marker = "✓" if i in top_indices else "✗"
+            print(f"    {marker} 투구{i+1}: vel={velocities[i]:.0f}°/s, "
+                  f"timing={timings[i]:.0f}ms, score={scores[i]:.2f}")
+
+        selected = [analyses[i] for i in top_indices]
+        # Re-number throws in temporal order
+        for new_idx, a in enumerate(selected, start=1):
+            a.throw_index = new_idx
+        return selected
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 

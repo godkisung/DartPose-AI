@@ -26,11 +26,11 @@ SEGMENTER_SMOOTHING_SIGMA = 0.06
 
 # IDLE → COCKING 전환: 팔꿈치 각도가 최근 안정 각도에서 이 값 이상 감소하면
 # "팔을 접기 시작"으로 판정 (도 단위)
-SEGMENTER_ANGLE_DROP_THRESHOLD = 10.0
+SEGMENTER_ANGLE_DROP_THRESHOLD = 7.0
 
 # COCKING → RELEASING 전환 후, RELEASING → FOLLOW_THROUGH 전환:
 # 테이크백 최저 각도에서 이 값 이상 각도가 증가하면 "팔 펴기 완료"로 판정 (도 단위)
-SEGMENTER_RELEASE_ANGLE_RISE = 15.0
+SEGMENTER_RELEASE_ANGLE_RISE = 10.0
 
 # FOLLOW_THROUGH → IDLE 전환: 각도 변화가 이 프레임 수 동안 안정되면
 # 한 투구 사이클 완료로 판정
@@ -38,13 +38,13 @@ SEGMENTER_IDLE_STABILITY_FRAMES = 8
 
 # 유효 투구로 인정되는 최소 팔꿈치 각도 변화 (도)
 # 단순 손 들기/내리기를 필터링하는 용도
-SEGMENTER_MIN_COCKING_ANGLE = 12.0
+SEGMENTER_MIN_COCKING_ANGLE = 6.0
 
 # 한 투구 사이클의 최소 프레임 수 (너무 짧으면 노이즈)
 SEGMENTER_MIN_SEGMENT_FRAMES = 10
 
 # 한 투구 사이클의 최소 시간 (초) — 연속 투구 간 쿨다운
-SEGMENTER_MIN_THROW_INTERVAL_S = 1.0
+SEGMENTER_MIN_THROW_INTERVAL_S = 0.7
 
 # 유효 세그먼트의 최대 지속 시간 (초) — 이보다 긴 세그먼트는 분할 시도
 SEGMENTER_MAX_SEGMENT_DURATION_S = 4.0
@@ -72,13 +72,33 @@ METRICS_MIN_FOREARM_VEC_NORM = 1e-5
 # ─── Validation Thresholds ────────────────────────────────────────────────────
 
 # 투구로 인정되는 손목 최소 변위 (정규화 단위)
-VALIDATION_MIN_WRIST_DISPLACEMENT = 0.07
+# ThrowSegmenter._filterInvalidSegments 및 DartAnalyzer._validateThrow 공용
+SEGMENTER_MIN_WRIST_DISPLACEMENT = 0.04
+VALIDATION_MIN_WRIST_DISPLACEMENT = 0.04
 
 # 투구로 인정되는 최소 팔꿈치 굽힘 각도 (도)
 VALIDATION_MIN_TAKEBACK_ANGLE = 5.0
 
+# 유효 투구의 테이크백 최대 각도 (도) — 이 값 초과 시 팔을 충분히 접지 않은 것으로 판단
+# 실측 데이터 기준 실제 투구: 50~160° 범위 (얕은 폼도 허용)
+VALIDATION_MAX_TAKEBACK_ANGLE = 165.0
+
+# 유효 투구의 최소 팔꿈치 확장 각속도 (도/초)
+# 실측: 유효 투구 ~80°/s~1400°/s. 단, PhaseDetector 오류 시 0.0 반환 가능 → 비활성화
+VALIDATION_MIN_ELBOW_VELOCITY = 0.0
+
 # 노이즈 사이클 필터링: 이 값을 초과하는 팔꿈치 각속도는 추적 오류로 판단 (도/초)
-VALIDATION_MAX_ELBOW_VELOCITY = 2000.0
+# 실측: 유효 최대 ~1400°/s, 노이즈 ~1800°/s+
+VALIDATION_MAX_ELBOW_VELOCITY = 1500.0
+
+# 테이크백 정점 → 릴리즈 타이밍 유효 범위 (ms)
+# 실측: 유효 투구 ~150ms~1000ms / 하한 100ms(지터 제거) / 상한 1200ms(다트 회수 제거)
+VALIDATION_MIN_RELEASE_TIMING_MS = 100.0
+VALIDATION_MAX_RELEASE_TIMING_MS = 1200.0
+
+# 팔꿈치 ROM 필터: |takeback_angle_deg - release_angle_deg| 최솟값 (도)
+# 실제 투구는 테이크백-릴리즈 간 팔 각도 변화가 크고, 단순 팔 들기는 변화가 거의 없음
+VALIDATION_MIN_ROM_ANGLE = 30.0
 
 # ─── Rule Engine 피드백 임계값 ────────────────────────────────────────────────
 # (메트릭 계산 후 이슈 판별에 사용)

@@ -36,6 +36,7 @@ from src.config import (
     SEGMENTER_MIN_THROW_INTERVAL_S,
     SEGMENTER_SEGMENT_PAD_S,
     SEGMENTER_MERGE_GAP_FRAMES,
+    SEGMENTER_MIN_WRIST_DISPLACEMENT,
 )
 
 
@@ -411,8 +412,8 @@ class ThrowSegmenter:
                 max_disp = float(np.max(np.linalg.norm(
                     coords - coords[0], axis=1
                 )))
-                if max_disp < 0.05:  # 정규화 좌표에서 5% 미만 이동
-                    print(f"    ⚠ 세그먼트 기각 (변위 부족: {max_disp:.3f})")
+                if max_disp < SEGMENTER_MIN_WRIST_DISPLACEMENT:
+                    print(f"    ⚠ 세그먼트 기각 (변위 부족: {max_disp:.3f} < {SEGMENTER_MIN_WRIST_DISPLACEMENT})")
                     continue
 
             valid.append(seg)
